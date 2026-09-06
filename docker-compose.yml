@@ -1,0 +1,14 @@
+services:
+  gist-decrypt:
+    image: ghcr.io/rsivanov-git/gist-decrypt:latest
+    restart: unless-stopped
+    environment:
+      GIST_URL: ${GIST_URL:?Set GIST_URL in .env}
+      PROXY_ENCRYPTION_KEY: ${PROXY_ENCRYPTION_KEY:?Set PROXY_ENCRYPTION_KEY in .env}
+    ports:
+      - "127.0.0.1:8080:8080"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
