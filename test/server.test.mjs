@@ -45,26 +45,28 @@ test('each request fetches fresh data; no cache or conditional 304; health and r
     return new Response(encrypt(Buffer.from(`version ${++calls}`)));
   });
   for (let i = 1; i <= 2; i++) {
-    const res = await fetch(url + (i === 1 ? '/' : '/Proxy-List.txt'), { headers: { 'If-None-Match': '*' } });
+    const res = await fetch(url + '/', { headers: { 'If-None-Match': '*' } });
+    assert.equal(res.headers.get('content-disposition'), null);
     assert.equal(res.status, 200); assert.equal(res.headers.get('cache-control'), 'no-store');
     assert.equal(await res.text(), `version ${i}`);
   }
   assert.equal((await fetch(url + '/healthz')).status, 200);
   assert.equal((await fetch(url + '/missing')).status, 404);
-  assert.equal((await fetch(url + '/Proxy-List.txt', { method: 'POST' })).status, 405);
+  assert.equal((await fetch(url + '/', { method: 'POST' })).status, 405);
+  assert.equal((await fetch(url + '/Proxy-List.txt')).status, 404);
   assert.equal(calls, 2);
 });
 test('upstream and authentication errors fail closed without old plaintext', async t => {
   const variants = [() => new Response('secret', { status: 404 }), () => new Response('bad JSON'), () => new Response(encrypt(Buffer.from('private'), 'wrong')), () => new Response('x'.repeat(1024 * 1024 + 1)), () => { throw new Error('secret URL'); }];
   let current = () => new Response(encrypt(Buffer.from('private')));
   const url = await serve(t, async () => current());
-  assert.equal(await (await fetch(url + '/Proxy-List.txt')).text(), 'private');
+  assert.equal(await (await fetch(url + '/')).text(), 'private');
   for (const variant of variants) {
-    current = variant; const res = await fetch(url + '/Proxy-List.txt');
+    current = variant; const res = await fetch(url + '/');
     assert.equal(res.status, 502); assert.equal(await res.text(), 'Unable to retrieve or decrypt the upstream file\n');
   }
 });
 test('upstream timeout returns error', async t => {
   const url = await serve(t, (_, { signal }) => new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true })), 20);
-  assert.equal((await fetch(url + '/Proxy-List.txt')).status, 502);
+  assert.equal((await fetch(url + '/')).status, 502);
 });

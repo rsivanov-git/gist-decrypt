@@ -76,7 +76,7 @@ Reference: [Tailscale Serve](https://tailscale.com/docs/reference/tailscale-cli/
 
 | Request | Result |
 | --- | --- |
-| `GET /` or `GET /Proxy-List.txt` | Fresh upstream fetch, authenticated decryption, original bytes with `text/plain; charset=utf-8` |
+| `GET /` | Fresh upstream fetch, authenticated decryption, original bytes with `text/plain; charset=utf-8` |
 | `GET /healthz` | `200 ok`; process liveness only, without contacting GitHub |
 | Other paths | `404` |
 | Methods other than GET | `405` |
@@ -159,7 +159,8 @@ Reference: [GitHub Container Registry](https://docs.github.com/en/packages/worki
 Add `AAD=surge-personal/Proxy-List.txt/v1` to `.env` for your existing encrypted
 Gist, and add `AAD: ${AAD?Set AAD in .env}` to the Compose environment section
 (or use the updated Compose file). Then run `docker compose pull` and
-`docker compose up -d`. The old `/Proxy-List.txt` route still works.
+`docker compose up -d`. Only `/` serves decrypted content; `/Proxy-List.txt` now returns 404.
+The response does not assign a filename: the name of the upstream file is irrelevant.
 
 For the existing Tailscale Service named `proxy-list`, point Serve at the backend
 root (remove any previously configured `/Proxy-List.txt` backend suffix):

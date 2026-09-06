@@ -40,7 +40,7 @@ export function createApp(settings, { fetchImpl = fetch, timeoutMs = 15000 } = {
     };
     if (req.method !== 'GET') { res.setHeader('Allow', 'GET'); reply(405, 'Method not allowed\n'); return; }
     if (req.url === '/healthz') { reply(200, 'ok\n'); return; }
-    if (req.url !== '/' && req.url !== '/Proxy-List.txt') { reply(404, 'Not found\n'); return; }
+    if (req.url !== '/') { reply(404, 'Not found\n'); return; }
     const controller = new AbortController();
     const disconnect = () => { if (!res.writableEnded) controller.abort(); };
     res.on('close', disconnect);
@@ -59,7 +59,7 @@ export function createApp(settings, { fetchImpl = fetch, timeoutMs = 15000 } = {
       }
       const plain = decrypt(Buffer.concat(chunks).toString('utf8'), settings.key, settings.aad);
       if (!res.destroyed) {
-        res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Content-Disposition': 'inline; filename="Proxy-List.txt"', 'Content-Length': plain.length });
+        res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Content-Length': plain.length });
         res.end(plain);
       }
     } catch {
