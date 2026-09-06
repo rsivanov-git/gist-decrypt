@@ -25,10 +25,15 @@ Edit `.env` with the **existing key used to encrypt your Gist**:
 ```dotenv
 GIST_URL=https://gist.githubusercontent.com/OWNER/GIST_ID/raw/Proxy-List.txt
 PROXY_ENCRYPTION_KEY=YOUR_EXISTING_32_BYTE_KEY_IN_BASE64
+AAD=YOUR_ENCRYPTOR_AAD
 ```
 
-These are the only service configuration variables. You can alternatively set
-both values directly in the `environment` section of `docker-compose.yml`.
+These are the three service configuration variables. `AAD` is the exact UTF-8
+string used during encryption, not Base64. It must be set explicitly; use `AAD=`
+if the encryptor uses no AAD. For the existing surge-personal publisher, set
+`AAD=surge-personal/Proxy-List.txt/v1`. Changing AAD only in this service will
+cause authentication to fail. You can alternatively set
+all three values directly in the `environment` section of `docker-compose.yml`.
 Do not commit real keys or secret Gist URLs. No GitHub token is required to read
 a secret Gist using its raw URL. Use the URL without a commit/revision segment
 so future Gist updates are picked up. HTML `gist.github.com` pages are not accepted.
@@ -36,11 +41,11 @@ so future Gist updates are picked up. HTML `gist.github.com` pages are not accep
 ```sh
 docker compose pull
 docker compose up -d
-curl --fail http://127.0.0.1:8080/Proxy-List.txt
+curl --fail http://127.0.0.1:8080/
 ```
 
 The image is `ghcr.io/rsivanov-git/gist-decrypt:latest`. For reproducible updates,
-replace `latest` with a published version such as `1.0.0` or an image digest.
+replace `latest` with a published version such as `1.1.0` or an image digest.
 The example binds **only to host localhost**, not all host interfaces.
 The container runs as a non-root user with a read-only filesystem and dropped
 Linux capabilities. No volumes or writable files are needed.
@@ -54,7 +59,7 @@ tailscale serve --bg http://127.0.0.1:8080
 tailscale serve status
 ```
 
-Append `/Proxy-List.txt` to the HTTPS address printed by Tailscale and use it
+Open the HTTPS address printed by Tailscale (the root `/` returns the file) and use it
 from an authorized tailnet device. HTTPS setup may require enabling HTTPS in
 the tailnet. If this host already has a Serve configuration, choose an unused
 Serve port or integrate the route instead of overwriting an existing service.
@@ -71,7 +76,7 @@ Reference: [Tailscale Serve](https://tailscale.com/docs/reference/tailscale-cli/
 
 | Request | Result |
 | --- | --- |
-| `GET /Proxy-List.txt` | Fresh upstream fetch, authenticated decryption, original bytes with `text/plain; charset=utf-8` |
+| `GET /` or `GET /Proxy-List.txt` | Fresh upstream fetch, authenticated decryption, original bytes with `text/plain; charset=utf-8` |
 | `GET /healthz` | `200 ok`; process liveness only, without contacting GitHub |
 | Other paths | `404` |
 | Methods other than GET | `405` |
@@ -101,10 +106,10 @@ The file must be a UTF-8 JSON envelope:
 
 - Key: exactly 32 random bytes encoded in canonical standard Base64.
 - Nonce: 12 bytes; authentication tag: 16 bytes.
-- Additional authenticated data (AAD): UTF-8 `surge-personal/Proxy-List.txt/v1`.
+- Additional authenticated data (AAD): exact UTF-8 value of the `AAD` environment variable.
 - The complete authentication tag is verified before any plaintext is returned.
 
-This matches the Proxy-List Gist publisher format. A different AAD, key, or
+This matches the Proxy-List Gist publisher format when its AAD is configured. A different AAD, key, or
 format fails authentication. The service does not generate or rotate keys.
 
 ## Local development and tests
@@ -148,3 +153,17 @@ in its package settings: GitHub packages can initially be private even when the
 source repository is public. Public packages support anonymous pulls.
 
 Reference: [GitHub Container Registry](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry).
+
+## Upgrade from v1.0.0
+
+Add `AAD=surge-personal/Proxy-List.txt/v1` to `.env` for your existing encrypted
+Gist, and add `AAD: ${AAD?Set AAD in .env}` to the Compose environment section
+(or use the updated Compose file). Then run `docker compose pull` and
+`docker compose up -d`. The old `/Proxy-List.txt` route still works.
+
+For the existing Tailscale Service named `proxy-list`, point Serve at the backend
+root (remove any previously configured `/Proxy-List.txt` backend suffix):
+
+```sh
+sudo tailscale serve --bg --service=svc:proxy-list --https=443 http://127.0.0.1:8080
+```

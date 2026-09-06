@@ -5,6 +5,7 @@ services:
     environment:
       GIST_URL: ${GIST_URL:?Set GIST_URL in .env}
       PROXY_ENCRYPTION_KEY: ${PROXY_ENCRYPTION_KEY:?Set PROXY_ENCRYPTION_KEY in .env}
+      AAD: ${AAD?Set AAD in .env (empty is allowed)}
     ports:
       - "127.0.0.1:8080:8080"
     read_only: true

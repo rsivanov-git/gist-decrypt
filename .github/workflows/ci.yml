@@ -24,4 +24,5 @@ jobs:
         env:
           GIST_URL: https://gist.githubusercontent.com/example/abcdef/raw/Proxy-List.txt
           PROXY_ENCRYPTION_KEY: test-placeholder
+          AAD: test-context
         run: docker compose config --quiet
