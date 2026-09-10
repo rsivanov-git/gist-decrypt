@@ -1,7 +1,7 @@
 # gist-decrypt
 
 A small Docker service that downloads an encrypted Gist on every request,
-authenticates and decrypts AES-256-GCM content, and returns the original file.
+decrypts Clash Mi AES-128-CBC content, and returns the original file.
 Built on Node.js 24 LTS with no third-party runtime dependencies.
 
 **No application cache, no saved plaintext, no stale fallback.** Each download
@@ -20,20 +20,18 @@ cp .env.example .env
 chmod 600 .env
 ```
 
-Edit `.env` with the **existing key used to encrypt your Gist**:
+Edit `.env` with the same password used in Clash Mi's **Decrypt Password** field:
 
 ```dotenv
 GIST_URL=https://gist.githubusercontent.com/OWNER/GIST_ID/raw/Proxy-List.txt
-PROXY_ENCRYPTION_KEY=YOUR_EXISTING_32_BYTE_KEY_IN_BASE64
-AAD=YOUR_ENCRYPTOR_AAD
+DECRYPT_PASSWORD='YOUR_CLASH_MI_PASSWORD'
 ```
 
-These are the three service configuration variables. `AAD` is the exact UTF-8
-string used during encryption, not Base64. It must be set explicitly; use `AAD=`
-if the encryptor uses no AAD. For the existing surge-personal publisher, set
-`AAD=surge-personal/Proxy-List.txt/v1`. Changing AAD only in this service will
-cause authentication to fail. You can alternatively set
-all three values directly in the `environment` section of `docker-compose.yml`.
+These are the two service configuration variables. The password is used as exact
+UTF-8 text, without trimming or Base64 decoding. Use single quotes in `.env` for
+literal values containing `$`, `#` or spaces (follow Compose dotenv escaping rules
+if the password itself contains quotes). `PROXY_ENCRYPTION_KEY` and `AAD` are no
+longer used. You can also set the two variables directly in Compose.
 Do not commit real keys or secret Gist URLs. No GitHub token is required to read
 a secret Gist using its raw URL. Use the URL without a commit/revision segment
 so future Gist updates are picked up. HTML `gist.github.com` pages are not accepted.
@@ -45,7 +43,7 @@ curl --fail http://127.0.0.1:8080/
 ```
 
 The image is `ghcr.io/rsivanov-git/gist-decrypt:latest`. For reproducible updates,
-replace `latest` with a published version such as `1.1.0` or an image digest.
+replace `latest` with a published version from the Clash Mi-compatible release or an image digest.
 The example binds **only to host localhost**, not all host interfaces.
 The container runs as a non-root user with a read-only filesystem and dropped
 Linux capabilities. No volumes or writable files are needed.
@@ -76,11 +74,11 @@ Reference: [Tailscale Serve](https://tailscale.com/docs/reference/tailscale-cli/
 
 | Request | Result |
 | --- | --- |
-| `GET /` | Fresh upstream fetch, authenticated decryption, original bytes with `text/plain; charset=utf-8` |
+| `GET /` | Fresh upstream fetch, decryption, original bytes with `text/plain; charset=utf-8` |
 | `GET /healthz` | `200 ok`; process liveness only, without contacting GitHub |
 | Other paths | `404` |
 | Methods other than GET | `405` |
-| Upstream error, timeout, invalid JSON, wrong key or altered data | `502`; no plaintext is returned |
+| Upstream error, timeout, invalid Base64, padding or UTF-8 | `502`; no plaintext is returned |
 
 Port is fixed at `8080`. Upstream timeout is 15 seconds; maximum encrypted
 response size is 1 MiB. Redirects are rejected. The configured URL is restricted
@@ -92,25 +90,25 @@ an application-generated `304`.
 
 ## Encryption compatibility
 
-The file must be a UTF-8 JSON envelope:
+The file is a Base64 string containing `IV || ciphertext`, without a JSON envelope:
 
-```json
-{
-  "version": 1,
-  "algorithm": "AES-256-GCM",
-  "nonce": "BASE64_12_BYTES",
-  "tag": "BASE64_16_BYTES",
-  "data": "BASE64_CIPHERTEXT"
-}
-```
+- Cipher: AES-128-CBC with PKCS7 padding.
+- Key: the 16 raw bytes of MD5 of the UTF-8 password, not the ASCII hex digest.
+- IV: the first 16 decoded bytes; ciphertext: all remaining bytes.
+- Plaintext: non-empty, valid UTF-8. Its original bytes are preserved.
+- Leading/trailing whitespace and embedded CR/LF are accepted; URL-safe Base64
+  and omitted padding are supported as in Dart's Base64 decoder.
 
-- Key: exactly 32 random bytes encoded in canonical standard Base64.
-- Nonce: 12 bytes; authentication tag: 16 bytes.
-- Additional authenticated data (AAD): exact UTF-8 value of the `AAD` environment variable.
-- The complete authentication tag is verified before any plaintext is returned.
+Implementation reference: [Clash Mi ProfileDecryptUtils](https://github.com/KaringX/clashmi/blob/92b4bfc6639328513b601a0a75b7d7b90ff85f82/lib/app/utils/profile_decrypt_utils.dart).
 
-This matches the Proxy-List Gist publisher format when its AAD is configured. A different AAD, key, or
-format fails authentication. The service does not generate or rotate keys.
+This format has **no authentication tag**. Padding and UTF-8 validation cannot
+reliably detect tampering or every wrong password. MD5 here is required for
+compatibility and is not a slow password KDF. Use a strong password and a trusted
+HTTPS source. This service buffers the result until validation finishes.
+
+The service decrypts every upstream body using this format; it does not require
+an `encryption-subscription` header. Its response is plaintext, so clients fetching
+from this service should leave **Decrypt Password** empty.
 
 ## Local development and tests
 
@@ -122,8 +120,8 @@ node --env-file=.env src/server.mjs
 ```
 
 Tests use synthetic encrypted fixtures and mock upstream responses; they do not
-require private Gists or real secrets. They cover byte preservation, tampering,
-wrong keys/AAD, configuration validation, fresh fetches, upstream failures,
+require private Gists or real secrets. They cover UTF-8 byte preservation, malformed ciphertext,
+padding and encoding validation, password derivation, configuration validation, fresh fetches, upstream failures,
 response size limits, timeouts, health and routing.
 
 Build locally:
@@ -154,16 +152,19 @@ source repository is public. Public packages support anonymous pulls.
 
 Reference: [GitHub Container Registry](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry).
 
-## Upgrade from v1.0.0
+## Upgrade from AES-GCM versions (v1.x)
 
-Add `AAD=surge-personal/Proxy-List.txt/v1` to `.env` for your existing encrypted
-Gist, and add `AAD: ${AAD?Set AAD in .env}` to the Compose environment section
-(or use the updated Compose file). Then run `docker compose pull` and
-`docker compose up -d`. Only `/` serves decrypted content; `/Proxy-List.txt` now returns 404.
-The response does not assign a filename: the name of the upstream file is irrelevant.
+This is a breaking format change. Re-encrypt the upstream Gist using the Clash Mi
+format above and the chosen password. Existing AES-256-GCM JSON files cannot be
+read by this version. Replace `PROXY_ENCRYPTION_KEY` and `AAD` in `.env` with
+`DECRYPT_PASSWORD`, and use the updated Compose file. Coordinate the Gist and
+service switch to avoid requests failing during migration.
 
-For the existing Tailscale Service named `proxy-list`, point Serve at the backend
-root (remove any previously configured `/Proxy-List.txt` backend suffix):
+Until a compatible release image is published, build this revision locally using
+the commands above; pulling an older `latest` image will not install these changes.
+After publication, run `docker compose pull` and `docker compose up -d`.
+
+For the existing Tailscale Service named `proxy-list`, the backend remains:
 
 ```sh
 sudo tailscale serve --bg --service=svc:proxy-list --https=443 http://127.0.0.1:8080

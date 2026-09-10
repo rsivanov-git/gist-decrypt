@@ -1,13 +1,15 @@
-import { createDecipheriv } from 'node:crypto';
+import { createDecipheriv, createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import { pathToFileURL } from 'node:url';
 
 const MAX_BYTES = 1024 * 1024;
 function base64(value) {
-  if (typeof value !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) throw new Error('Invalid Base64');
-  const bytes = Buffer.from(value, 'base64');
-  if (bytes.toString('base64') !== value) throw new Error('Invalid Base64');
-  return bytes;
+  if (typeof value !== 'string') throw new Error('Invalid Base64');
+  // Dart Base64Codec accepts URL-safe characters and omitted padding too.
+  const normalized = value.trim().replace(/[\r\n]/g, '').replace(/-/g, '+').replace(/_/g, '/');
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(normalized) || normalized.length % 4 === 1 ||
+      (normalized.includes('=') && normalized.length % 4 !== 0)) throw new Error('Invalid Base64');
+  return Buffer.from(normalized, 'base64');
 }
 export function config(env = process.env) {
   let url, key;
@@ -15,21 +17,20 @@ export function config(env = process.env) {
     url = new URL(env.GIST_URL);
     if (url.protocol !== 'https:' || url.hostname !== 'gist.githubusercontent.com' || url.port || url.username || url.password || url.search || url.hash || !/^\/[^/]+\/[a-f0-9]+\/raw\/[^/]+$/.test(url.pathname)) throw new Error();
   } catch { throw new Error('GIST_URL must be an HTTPS gist.githubusercontent.com raw file URL without a revision, query or credentials.'); }
-  try { key = base64(env.PROXY_ENCRYPTION_KEY); if (key.length !== 32) throw new Error(); }
-  catch { throw new Error('PROXY_ENCRYPTION_KEY must contain a Base64-encoded 32-byte key.'); }
-  if (typeof env.AAD !== 'string') throw new Error('AAD must be set explicitly (an empty string is allowed).');
-  return { url: url.href, key, aad: Buffer.from(env.AAD, 'utf8') };
+  if (typeof env.DECRYPT_PASSWORD !== 'string' || env.DECRYPT_PASSWORD.length === 0) throw new Error('DECRYPT_PASSWORD must be a non-empty string.');
+  key = createHash('md5').update(env.DECRYPT_PASSWORD, 'utf8').digest();
+  return { url: url.href, key };
 }
-export function decrypt(text, key, aad) {
-  const data = JSON.parse(text);
-  if (!data || data.version !== 1 || data.algorithm !== 'AES-256-GCM') throw new Error('Unsupported envelope');
-  const nonce = base64(data.nonce), tag = base64(data.tag), ciphertext = base64(data.data);
-  if (nonce.length !== 12 || tag.length !== 16) throw new Error('Invalid envelope');
-  const decipher = createDecipheriv('aes-256-gcm', key, nonce, { authTagLength: 16 });
-  decipher.setAAD(aad);
-  decipher.setAuthTag(tag);
-  // Never send update() output before final() authenticates the entire message.
-  return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+export function decrypt(text, key) {
+  const raw = base64(text);
+  if (raw.length <= 16 || (raw.length - 16) % 16 !== 0) throw new Error('Invalid encrypted profile');
+  const decipher = createDecipheriv('aes-128-cbc', key, raw.subarray(0, 16));
+  // Buffer the entire message until padding and UTF-8 validation succeed.
+  // CBC has no authentication tag: these checks cannot detect all alterations.
+  const plain = Buffer.concat([decipher.update(raw.subarray(16)), decipher.final()]);
+  if (plain.length === 0) throw new Error('Empty profile');
+  new TextDecoder('utf-8', { fatal: true }).decode(plain);
+  return plain;
 }
 export function createApp(settings, { fetchImpl = fetch, timeoutMs = 15000 } = {}) {
   return createServer(async (req, res) => {
@@ -48,7 +49,7 @@ export function createApp(settings, { fetchImpl = fetch, timeoutMs = 15000 } = {
     try {
       const upstream = await fetchImpl(settings.url, {
         redirect: 'error', cache: 'no-store', signal,
-        headers: { Accept: 'application/json, text/plain', 'Cache-Control': 'no-cache, no-store', Pragma: 'no-cache' },
+        headers: { Accept: 'text/plain', 'Cache-Control': 'no-cache, no-store', Pragma: 'no-cache' },
       });
       if (upstream.status !== 200 || !upstream.body) throw new Error('Upstream failure');
       const chunks = []; let size = 0;
@@ -57,7 +58,7 @@ export function createApp(settings, { fetchImpl = fetch, timeoutMs = 15000 } = {
         if (size > MAX_BYTES) throw new Error('Upstream too large');
         chunks.push(chunk);
       }
-      const plain = decrypt(Buffer.concat(chunks).toString('utf8'), settings.key, settings.aad);
+      const plain = decrypt(Buffer.concat(chunks).toString('utf8'), settings.key);
       if (!res.destroyed) {
         res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Content-Length': plain.length });
         res.end(plain);

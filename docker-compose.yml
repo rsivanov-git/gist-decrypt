@@ -4,8 +4,7 @@ services:
     restart: unless-stopped
     environment:
       GIST_URL: ${GIST_URL:?Set GIST_URL in .env}
-      PROXY_ENCRYPTION_KEY: ${PROXY_ENCRYPTION_KEY:?Set PROXY_ENCRYPTION_KEY in .env}
-      AAD: ${AAD?Set AAD in .env (empty is allowed)}
+      DECRYPT_PASSWORD: ${DECRYPT_PASSWORD:?Set DECRYPT_PASSWORD in .env}
     ports:
       - "127.0.0.1:8080:8080"
     read_only: true
